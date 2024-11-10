@@ -87,9 +87,6 @@ architecture behavioral of cpu is
 
   signal STATE                      : state_type := nr_fetch;
   signal N_STATE                    : state_type;
-  attribute fsm_encoding            : string;
-  attribute fsm_encoding of STATE   : signal is "sequential";
-  attribute fsm_encoding of N_STATE : signal is "sequential";
 
   begin
 
