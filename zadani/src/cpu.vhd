@@ -77,8 +77,8 @@ architecture behavioral of cpu is
    idle, fetch, decode,
    ex_add,
    ex_sub,
-   ex_ls_check, ex_ls_skip_check, ex_ls_skip, -- loop start
-   ex_le_check, ex_le_skip_l, ex_le_skip_check, ex_le_skip_cnt_check,  -- loop end
+   ex_ls, ex_ls_cnt_check, ex_ls_skip, -- loop start
+   ex_le, ex_le_back_l, ex_le_back_check, ex_le_back_cnt_check,  -- loop end
    ex_tmp_load,
    ex_tmp_store,
    ex_print_w, ex_print,
@@ -242,7 +242,13 @@ architecture behavioral of cpu is
       when nr_decode =>
         if (DATA_RDATA = X"40") then
           READY <= '1';
-          N_STATE <= fetch;
+          if (EN = '1') then -- fetch
+            ADDR_MUX_SEL <= '1';
+            DATA_EN <= '1';
+            N_STATE <= decode;
+          else
+            N_STATE <= idle;
+          end if;
         else
           DATA_EN <= '1';
           PTR_INC <= '1';
@@ -250,8 +256,10 @@ architecture behavioral of cpu is
         end if;
 
       when idle =>
-        if (EN = '1') then
-          N_STATE <= fetch;
+        if (EN = '1') then -- fetch
+          ADDR_MUX_SEL <= '1';
+          DATA_EN <= '1';
+          N_STATE <= decode;
         else
           N_STATE <= idle;
         end if;
@@ -278,10 +286,10 @@ architecture behavioral of cpu is
             N_STATE <= ex_sub;
           when X"5B" => -- [
             DATA_EN <= '1';
-            N_STATE <= ex_ls_check;
+            N_STATE <= ex_ls;
           when X"5D" => -- ]
             DATA_EN <= '1';
-            N_STATE <= ex_le_check;
+            N_STATE <= ex_le;
             PC_INC <= '0';
           when X"24" => -- $
             DATA_EN <= '1';
@@ -310,6 +318,7 @@ architecture behavioral of cpu is
             N_STATE <= fetch;
         end case;
 
+      -- ARITHMETIC
       when ex_add =>
         WSRC_MUX_SEL <= "11";
         DATA_RDWR <= '0';
@@ -322,17 +331,24 @@ architecture behavioral of cpu is
         DATA_EN <= '1';
         N_STATE <= fetch;
 
-      when ex_ls_check =>
+      -- LOOP
+      when ex_ls =>
         if (DATA_RDATA = X"00") then
           CNT_SET <= '1';
-          N_STATE <= ex_ls_skip_check;
+          DATA_EN <= '1';
+          ADDR_MUX_SEL <= '1';
+          N_STATE <= ex_ls_skip;
         else
-          N_STATE <= fetch;
+          ADDR_MUX_SEL <= '1';
+          DATA_EN <= '1';
+          N_STATE <= decode;
         end if;
 
-      when ex_ls_skip_check =>
+      when ex_ls_cnt_check =>
         if (CNT = X"00") then
-          N_STATE <= fetch;
+          ADDR_MUX_SEL <= '1';
+          DATA_EN <= '1';
+          N_STATE <= decode;
         else
           DATA_EN <= '1';
           ADDR_MUX_SEL <= '1';
@@ -346,57 +362,46 @@ architecture behavioral of cpu is
           CNT_DEC <= '1';
         end if;
         PC_INC <= '1';
-        N_STATE <= ex_ls_skip_check;
+        N_STATE <= ex_ls_cnt_check;
 
-      when ex_le_check =>
+      when ex_le =>
         if (DATA_RDATA = X"00") then
           PC_INC <= '1';
           N_STATE <= fetch;
         else
           PC_DEC <= '1';
           CNT_SET <= '1';
-          N_STATE <= ex_le_skip_l;
+          N_STATE <= ex_le_back_l;
         end if;
 
-      when ex_le_skip_l =>
+      when ex_le_back_l =>
         DATA_EN <= '1';
         ADDR_MUX_SEL <= '1';
-        N_STATE <= ex_le_skip_check;
+        N_STATE <= ex_le_back_check;
 
-      when ex_le_skip_check =>
+      when ex_le_back_check =>
         if (DATA_RDATA = X"5B") then
           CNT_DEC <= '1';
         elsif (DATA_RDATA = X"5D") then
           CNT_INC <= '1';
         end if;
-        N_STATE <= ex_le_skip_cnt_check;
+        N_STATE <= ex_le_back_cnt_check;
 
-      when ex_le_skip_cnt_check =>
+      when ex_le_back_cnt_check =>
         if (CNT = X"00") then
           PC_INC <= '1';
           N_STATE <= fetch;
         else
           PC_DEC <= '1';
-          N_STATE <= ex_le_skip_l;
+          N_STATE <= ex_le_back_l;
         end if;
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+      -- TMP
       when ex_tmp_load =>
         TMP_ID <= '1';
-        N_STATE <= fetch;
+        ADDR_MUX_SEL <= '1';
+        DATA_EN <= '1';
+        N_STATE <= decode;
 
       when ex_tmp_store =>
         WSRC_MUX_SEL <= "01";
@@ -404,6 +409,7 @@ architecture behavioral of cpu is
         DATA_RDWR <= '0';
         N_STATE <= fetch;
 
+      -- IO
       when ex_print_w =>
         DATA_EN <= '1';
         if (OUT_BUSY = '0') then
@@ -436,6 +442,7 @@ architecture behavioral of cpu is
         WSRC_MUX_SEL <= "00";
         N_STATE <= fetch;
 
+      -- HALT
       when halt =>
         DONE <= '1';
         N_STATE <= halt;
