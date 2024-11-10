@@ -52,7 +52,7 @@ architecture behavioral of cpu is
   signal CNT      : std_logic_vector(7 downto 0);
   signal CNT_INC  : std_logic;
   signal CNT_DEC  : std_logic;
-  signal CNT_ZERO : std_logic;
+  signal CNT_SET  : std_logic;
 
   -- TMP signals
   signal TMP      : std_logic_vector(7 downto 0);
@@ -73,22 +73,19 @@ architecture behavioral of cpu is
   signal WSRC_MUX_SEL : std_logic_vector(1 downto 0);
 
   type state_type is (s_reset,
-   nr_idle, nr_fetch, nr_decode,
+   nr_idle, nr_fetch, nr_decode, -- not ready states
    idle, fetch, decode,
-   inc,
-   dec,
-   add_load, add_store,
-   sub_load, sub_store,
-   ls, ls_val_load, ls_val_check, ls_skip, ls_skip_check, ls_skip_ins_load, ls_skip_ins_check, ls_skip_ins_check_inc, ls_skip_ins_check_dec,
-   le_val_load, le_val_check, le_val_check_end, le_go_back, le_go_back_check, le_go_back_ins_load, le_go_back_ins_check, le_go_back_ins_check_inc, le_go_back_ins_check_dec,
-   load_tmp_load, load_tmp,
-   store_tmp_load, store_tmp,
-   print_wait, print_load, print,
-   read_wait, read_in,
-   noop,
+   ex_add,
+   ex_sub,
+   ex_ls_check, ex_ls_skip_check, ex_ls_skip, -- loop start
+   ex_le_check, ex_le_skip_l, ex_le_skip_check, ex_le_skip_cnt_check,  -- loop end
+   ex_tmp_load,
+   ex_tmp_store,
+   ex_print_w, ex_print,
+   ex_read_w, ex_read,
    halt);
 
-  signal STATE                      : state_type := s_reset;
+  signal STATE                      : state_type := nr_fetch;
   signal N_STATE                    : state_type;
   attribute fsm_encoding            : string;
   attribute fsm_encoding of STATE   : signal is "sequential";
@@ -136,21 +133,8 @@ architecture behavioral of cpu is
         CNT <= CNT + 1;
       elsif (CNT_DEC = '1') then
         CNT <= CNT - 1;
-      end if;
-    end if;
-
-  end process;
-
-  PROCESS_CNT_ZERO : process (CNT, RESET)
-  begin
-
-    if (RESET = '1') then
-      CNT_ZERO <= '1';
-    else
-      if (CNT = X"00") then
-        CNT_ZERO <= '1';
-      else
-        CNT_ZERO <= '0';
+      elsif (CNT_SET = '1') then
+        CNT <= X"01";
       end if;
     end if;
 
@@ -212,233 +196,7 @@ architecture behavioral of cpu is
 
   FSM : process (STATE, EN, DATA_RDATA, IN_VLD, OUT_BUSY)
   begin
-    case STATE is
-      when s_reset =>
-        N_STATE <= nr_idle;
 
-      when nr_idle =>
-        if (EN = '1') then
-          N_STATE <= nr_fetch;
-        else
-          N_STATE <= nr_idle;
-        end if;
-
-      when nr_fetch =>
-        N_STATE <= nr_decode;
-
-      when nr_decode =>
-        if (DATA_RDATA = X"40") then
-          N_STATE <= idle;
-        else
-          N_STATE <= nr_fetch;
-        end if;
-
-      when idle =>
-        if (EN = '1') then
-          N_STATE <= fetch;
-        else
-          N_STATE <= idle;
-        end if;
-
-      when fetch =>
-        N_STATE <= decode;
-
-      when decode =>
-        case DATA_RDATA is
-          when X"3E" => -- >
-            N_STATE <= inc;
-          when X"3C" => -- <
-            N_STATE <= dec;
-          when X"2B" => -- +
-            N_STATE <= add_load;
-          when X"2D" => -- -
-            N_STATE <= sub_load;
-          when X"5B" => -- [
-            N_STATE <= ls;
-          when X"5D" => -- ]
-            N_STATE <= le_val_load;
-          when X"24" => -- $
-            N_STATE <= load_tmp_load;
-          when X"21" => -- !
-            N_STATE <= store_tmp_load;
-          when X"2E" => -- .
-            N_STATE <= print_wait;
-          when X"2C" => -- ,
-            N_STATE <= read_wait;
-          when X"40" => -- @
-            N_STATE <= halt;
-          when others => -- comments
-            N_STATE <= noop;
-        end case;
-
-      when inc =>
-        N_STATE <= fetch;
-
-      when dec =>
-        N_STATE <= fetch;
-
-      when add_load =>
-        N_STATE <= add_store;
-
-      when add_store =>
-        N_STATE <= fetch;
-
-      when sub_load =>
-        N_STATE <= sub_store;
-
-      when sub_store =>
-        N_STATE <= fetch;
-
-
-
-
-      when ls => -- [ ; pc++
-        N_STATE <= ls_val_load;
-
-      when ls_val_load => -- load value from memory
-        N_STATE <= ls_val_check;
-
-      when ls_val_check => -- check if value == 0
-        if (DATA_RDATA = X"00") then
-          N_STATE <= ls_skip;
-        else
-          N_STATE <= fetch; -- continue execution
-        end if;
-
-      when ls_skip => -- start skip process ; cnt = 1
-        N_STATE <= ls_skip_check;
-
-      when ls_skip_check => -- check if cnt == 0
-        if (CNT_ZERO = '1') then
-          N_STATE <= fetch; -- continue execution
-        else
-          N_STATE <= ls_skip_ins_load;
-        end if;
-
-      when ls_skip_ins_load => -- load instruction, should also increment pc
-        N_STATE <= ls_skip_ins_check;
-
-      when ls_skip_ins_check => -- check if instruction is [ or ]
-        if (DATA_RDATA = X"5B") then -- [
-          N_STATE <= ls_skip_ins_check_inc;
-        elsif (DATA_RDATA = X"5D") then -- ]
-          N_STATE <= ls_skip_ins_check_dec;
-        else
-          N_STATE <= ls_skip_check;
-        end if;
-
-      when ls_skip_ins_check_inc => -- [ ; cnt++
-        N_STATE <= ls_skip_check;
-
-      when ls_skip_ins_check_dec => -- ] ; cnt--
-        N_STATE <= ls_skip_check;
-
-
-      when le_val_load => -- ] ;
-          N_STATE <= le_val_check;
-
-      when le_val_check => -- check if value == 0
-        if (DATA_RDATA = X"00") then
-          N_STATE <= le_val_check_end; -- continue execution
-        else
-          N_STATE <= le_go_back;
-        end if;
-
-      when le_val_check_end => -- pc++
-        N_STATE <= fetch;
-
-      when le_go_back => -- cnt = 1, pc--
-        N_STATE <= le_go_back_check;
-
-      when le_go_back_check => -- check if cnt == 0
-        if (CNT_ZERO = '1') then
-          N_STATE <= fetch; -- continue execution
-        else
-          N_STATE <= le_go_back_ins_load;
-        end if;
-
-      when le_go_back_ins_load => -- load instruction, should also decrement pc
-        N_STATE <= le_go_back_ins_check;
-
-      when le_go_back_ins_check => -- check if instruction is [ or ]
-        if (DATA_RDATA = X"5B") then -- [
-          N_STATE <= le_go_back_ins_check_inc;
-        elsif (DATA_RDATA = X"5D") then -- ]
-          N_STATE <= le_go_back_ins_check_dec;
-        else
-          N_STATE <= le_go_back_check;
-        end if;
-
-      when le_go_back_ins_check_inc => -- [ ; cnt++
-        N_STATE <= le_go_back_check;
-
-      when le_go_back_ins_check_dec => -- ] ; cnt--
-        N_STATE <= le_go_back_ins_check;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-      when load_tmp_load =>
-        N_STATE <= load_tmp;
-
-      when load_tmp =>
-        N_STATE <= fetch;
-
-      when store_tmp_load =>
-        N_STATE <= store_tmp;
-
-      when store_tmp =>
-        N_STATE <= fetch;
-
-      when print_wait =>
-        if (OUT_BUSY = '0') then
-          N_STATE <= print_load;
-        else
-          N_STATE <= print_wait;
-        end if;
-
-      when print_load =>
-        N_STATE <= print;
-
-      when print =>
-        N_STATE <= fetch;
-
-      when read_wait =>
-        if (IN_VLD = '1') then
-          N_STATE <= read_in;
-        else
-          N_STATE <= read_wait;
-        end if;
-
-      when read_in =>
-        N_STATE <= fetch;
-
-      when noop =>
-        N_STATE <= fetch;
-
-      when halt =>
-        N_STATE <= idle;
-    end case;
-
-  end process;
-
-  output : process (STATE)
-  begin
     DATA_EN <= '0';
 
     IN_REQ <= '0';
@@ -451,6 +209,7 @@ architecture behavioral of cpu is
     WSRC_MUX_SEL <= "00";
 
     CNT_INC <= '0';
+    CNT_SET <= '0';
     CNT_DEC <= '0';
     PC_INC <= '0';
     PC_DEC <= '0';
@@ -462,141 +221,164 @@ architecture behavioral of cpu is
       when s_reset =>
         READY <= '0';
         DONE <= '0';
+        if(EN = '1') then
+          N_STATE <= nr_fetch;
+        else
+          N_STATE <= nr_idle;
+        end if;
 
       when nr_idle =>
-        null;
+        if (EN = '1') then
+          N_STATE <= nr_fetch;
+        else
+          N_STATE <= nr_idle;
+        end if;
 
       when nr_fetch =>
-        ADDR_MUX_SEL <= '0';
         DATA_EN <= '1';
-        DATA_RDWR <= '1';
         PTR_INC <= '1';
+        N_STATE <= nr_decode;
 
       when nr_decode =>
-        null;
+        if (DATA_RDATA = X"40") then
+          READY <= '1';
+          N_STATE <= fetch;
+        else
+          DATA_EN <= '1';
+          PTR_INC <= '1';
+          N_STATE <= nr_decode;
+        end if;
 
       when idle =>
-        READY <= '1';
+        if (EN = '1') then
+          N_STATE <= fetch;
+        else
+          N_STATE <= idle;
+        end if;
 
       when fetch =>
         ADDR_MUX_SEL <= '1';
         DATA_EN <= '1';
-        DATA_RDWR <= '1';
+        N_STATE <= decode;
 
       when decode =>
-        null;
-
-      when inc =>
-        PTR_INC <= '1';
         PC_INC <= '1';
+        case DATA_RDATA is
+          when X"3E" => -- >
+            PTR_INC <= '1';
+            N_STATE <= fetch;
+          when X"3C" => -- <
+            PTR_DEC <= '1';
+            N_STATE <= fetch;
+          when X"2B" => -- +
+            DATA_EN <= '1';
+            N_STATE <= ex_add;
+          when X"2D" => -- -
+            DATA_EN <= '1';
+            N_STATE <= ex_sub;
+          when X"5B" => -- [
+            DATA_EN <= '1';
+            N_STATE <= ex_ls_check;
+          when X"5D" => -- ]
+            DATA_EN <= '1';
+            N_STATE <= ex_le_check;
+            PC_INC <= '0';
+          when X"24" => -- $
+            DATA_EN <= '1';
+            N_STATE <= ex_tmp_load;
+          when X"21" => -- !
+            DATA_EN <= '1';
+            N_STATE <= ex_tmp_store;
+          when X"2E" => -- .
+            DATA_EN <= '1';
+            if (OUT_BUSY = '0') then
+              N_STATE <= ex_print;
+            else
+              N_STATE <= ex_print_w;
+            end if;
+          when X"2C" => -- ,
+            IN_REQ <= '1';
+            if (IN_VLD = '1') then
+              N_STATE <= ex_read;
+            else
+              N_STATE <= ex_read_w;
+            end if;
+          when X"40" => -- @
+            N_STATE <= halt;
+            PC_INC <= '0';
+          when others => -- comments
+            N_STATE <= fetch;
+        end case;
 
-      when dec =>
-        PTR_DEC <= '1';
-        PC_INC <= '1';
-
-      when add_load => null;
-        PC_INC <= '1';
-        ADDR_MUX_SEL <= '0';
-        DATA_RDWR <= '1';
-        DATA_EN <= '1';
-
-      when add_store => null;
-        ADDR_MUX_SEL <= '0';
+      when ex_add =>
         WSRC_MUX_SEL <= "11";
         DATA_RDWR <= '0';
         DATA_EN <= '1';
+        N_STATE <= fetch;
 
-      when sub_load => null;
-        PC_INC <= '1';
-        ADDR_MUX_SEL <= '0';
-        DATA_RDWR <= '1';
-        DATA_EN <= '1';
-
-      when sub_store => null;
-        ADDR_MUX_SEL <= '0';
+      when ex_sub =>
         WSRC_MUX_SEL <= "10";
         DATA_RDWR <= '0';
         DATA_EN <= '1';
+        N_STATE <= fetch;
 
+      when ex_ls_check =>
+        if (DATA_RDATA = X"00") then
+          CNT_SET <= '1';
+          N_STATE <= ex_ls_skip_check;
+        else
+          N_STATE <= fetch;
+        end if;
 
+      when ex_ls_skip_check =>
+        if (CNT = X"00") then
+          N_STATE <= fetch;
+        else
+          DATA_EN <= '1';
+          ADDR_MUX_SEL <= '1';
+          N_STATE <= ex_ls_skip;
+        end if;
 
-
-      when ls =>
+      when ex_ls_skip =>
+        if (DATA_RDATA = X"5B") then
+          CNT_INC <= '1';
+        elsif (DATA_RDATA = X"5D") then
+          CNT_DEC <= '1';
+        end if;
         PC_INC <= '1';
+        N_STATE <= ex_ls_skip_check;
 
-      when ls_val_load =>
-        ADDR_MUX_SEL <= '0';
-        DATA_RDWR <= '1';
+      when ex_le_check =>
+        if (DATA_RDATA = X"00") then
+          PC_INC <= '1';
+          N_STATE <= fetch;
+        else
+          PC_DEC <= '1';
+          CNT_SET <= '1';
+          N_STATE <= ex_le_skip_l;
+        end if;
+
+      when ex_le_skip_l =>
         DATA_EN <= '1';
-
-      when ls_val_check =>
-        null;
-
-      when ls_skip =>
-        CNT_INC <= '1';
-
-      when ls_skip_check =>
-        null;
-
-      when ls_skip_ins_load =>
-        PC_INC <= '1';
         ADDR_MUX_SEL <= '1';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
+        N_STATE <= ex_le_skip_check;
 
-      when ls_skip_ins_check =>
-        null;
+      when ex_le_skip_check =>
+        if (DATA_RDATA = X"5B") then
+          CNT_DEC <= '1';
+        elsif (DATA_RDATA = X"5D") then
+          CNT_INC <= '1';
+        end if;
+        N_STATE <= ex_le_skip_cnt_check;
 
-      when ls_skip_ins_check_inc =>
-        CNT_INC <= '1';
-
-      when ls_skip_ins_check_dec =>
-        CNT_DEC <= '1';
-
-
-
-
-
-
-
-
-
-
-
-
-
-      when le_val_load =>
-        ADDR_MUX_SEL <= '0';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
-
-      when le_val_check =>
-        null;
-
-      when le_val_check_end =>
-        PC_INC <= '1';
-
-      when le_go_back =>
-        CNT_INC <= '1';
-        PC_DEC <= '1';
-
-      when le_go_back_check =>
-        null;
-
-      when le_go_back_ins_load =>
-        PC_DEC <= '1';
-        ADDR_MUX_SEL <= '0';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
-
-      when le_go_back_ins_check =>
-        null;
-
-      when le_go_back_ins_check_inc =>
-        CNT_INC <= '1';
-
-      when le_go_back_ins_check_dec =>
-        CNT_DEC <= '1';
+      when ex_le_skip_cnt_check =>
+        if (CNT = X"00") then
+          PC_INC <= '1';
+          N_STATE <= fetch;
+        else
+          PC_DEC <= '1';
+          N_STATE <= ex_le_skip_l;
+        end if;
 
 
 
@@ -612,66 +394,52 @@ architecture behavioral of cpu is
 
 
 
-
-
-
-
-
-
-
-      when load_tmp_load =>
-        PC_INC <= '1';
-        ADDR_MUX_SEL <= '0';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
-
-      when load_tmp =>
+      when ex_tmp_load =>
         TMP_ID <= '1';
+        N_STATE <= fetch;
 
-      when store_tmp_load =>
-        PC_INC <= '1';
-        ADDR_MUX_SEL <= '0';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
-
-      when store_tmp =>
-        ADDR_MUX_SEL <= '0';
+      when ex_tmp_store =>
         WSRC_MUX_SEL <= "01";
         DATA_EN <= '1';
         DATA_RDWR <= '0';
+        N_STATE <= fetch;
 
-
-      when print_wait =>
-        ADDR_MUX_SEL <= '0';
+      when ex_print_w =>
         DATA_EN <= '1';
-        DATA_RDWR <= '1';
+        if (OUT_BUSY = '0') then
+          OUT_WE <= '1';
+          OUT_DATA <= DATA_RDATA;
+          N_STATE <= fetch;
+        else
+          N_STATE <= ex_print_w;
+        end if;
 
-      when print_load =>
-        ADDR_MUX_SEL <= '0';
-        DATA_EN <= '1';
-        DATA_RDWR <= '1';
-
-      when print =>
-        PC_INC <= '1';
+      when ex_print =>
         OUT_WE <= '1';
         OUT_DATA <= DATA_RDATA;
+        N_STATE <= fetch;
 
-      when read_wait =>
+      when ex_read_w =>
         IN_REQ <= '1';
+        if (IN_VLD = '1') then
+          DATA_EN <= '1';
+          DATA_RDWR <= '0';
+          WSRC_MUX_SEL <= "00";
+          N_STATE <= fetch;
+        else
+          N_STATE <= ex_read_w;
+        end if;
 
-      when read_in =>
-        PC_INC <= '1';
-        ADDR_MUX_SEL <= '0';
+      when ex_read =>
         DATA_EN <= '1';
         DATA_RDWR <= '0';
         WSRC_MUX_SEL <= "00";
-
-      when noop =>
-        PC_INC <= '1';
+        N_STATE <= fetch;
 
       when halt =>
         DONE <= '1';
-  end case;
+        N_STATE <= halt;
+    end case;
 
   end process;
 
